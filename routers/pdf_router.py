@@ -67,12 +67,43 @@ async def inspect_pdf(file: UploadFile = File(...)):
     )
 
 
+def _optimize_pdf_image(img_bytes: bytes, max_dim: int, quality: int) -> bytes:
+    """Safely convert any PIL image (RGBA, Palette, CMYK, etc.) to a downsampled JPEG."""
+    try:
+        im = Image.open(io.BytesIO(img_bytes))
+        if im.mode in ("RGBA", "LA"):
+            bg = Image.new("RGB", im.size, (255, 255, 255))
+            bg.paste(im, mask=im.split()[-1])
+            im = bg
+        elif im.mode == "P":
+            im = im.convert("RGBA")
+            bg = Image.new("RGB", im.size, (255, 255, 255))
+            bg.paste(im, mask=im.split()[-1])
+            im = bg
+        elif im.mode != "RGB":
+            im = im.convert("RGB")
+
+        w, h = im.size
+        if max(w, h) > max_dim:
+            scale = max_dim / float(max(w, h))
+            new_w = max(1, int(w * scale))
+            new_h = max(1, int(h * scale))
+            im = im.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+        buf = io.BytesIO()
+        im.save(buf, format="JPEG", quality=quality, optimize=True)
+        return buf.getvalue()
+    except Exception:
+        return img_bytes
+
+
 @router.post("/compress")
 async def compress_pdf(
     file: UploadFile = File(...),
     level: str = Form("medium"),  # low | medium | extreme
+    flatten: bool = Form(False),  # Optional: downsample pages to crisp web-ready images
 ):
-    """Compress PDF by re-encoding embedded images and deflating streams."""
+    """Compress PDF by re-encoding embedded images (supporting all color modes), deflating streams, and optional raster flattening."""
     raw = await file.read()
     try:
         doc = fitz.open(stream=raw, filetype="pdf")
@@ -80,13 +111,14 @@ async def compress_pdf(
         raise HTTPException(status_code=400, detail=f"Could not open PDF: {exc}")
 
     presets = {
-        "low": {"max_dim": 1800, "jpg_quality": 80},
-        "medium": {"max_dim": 1300, "jpg_quality": 62},
-        "extreme": {"max_dim": 900, "jpg_quality": 42},
+        "low": {"max_dim": 1500, "jpg_quality": 75, "dpi": 150},
+        "medium": {"max_dim": 1050, "jpg_quality": 55, "dpi": 120},
+        "extreme": {"max_dim": 750, "jpg_quality": 38, "dpi": 85},
     }
     cfg = presets.get(level.lower(), presets["medium"])
 
     seen_xrefs = set()
+    replaced_count = 0
     for page in doc:
         for img_info in page.get_images(full=True):
             xref = img_info[0]
@@ -97,27 +129,11 @@ async def compress_pdf(
                 base_img = doc.extract_image(xref)
                 if not base_img or "image" not in base_img:
                     continue
-                img_bytes = base_img["image"]
-                pil_img = Image.open(io.BytesIO(img_bytes))
-                if pil_img.mode in ("RGBA", "LA", "P"):
-                    continue
-                if pil_img.mode != "RGB":
-                    pil_img = pil_img.convert("RGB")
-
-                w, h = pil_img.size
-                max_dim = cfg["max_dim"]
-                if max(w, h) > max_dim:
-                    scale = max_dim / float(max(w, h))
-                    pil_img = pil_img.resize(
-                        (max(1, int(w * scale)), max(1, int(h * scale))),
-                        Image.Resampling.LANCZOS,
-                    )
-
-                buf = io.BytesIO()
-                pil_img.save(buf, format="JPEG", quality=cfg["jpg_quality"], optimize=True)
-                new_bytes = buf.getvalue()
-                if len(new_bytes) < len(img_bytes):
-                    page.replace_image(xref, stream=new_bytes)
+                orig_img_bytes = base_img["image"]
+                new_img_bytes = _optimize_pdf_image(orig_img_bytes, cfg["max_dim"], cfg["jpg_quality"])
+                if len(new_img_bytes) < len(orig_img_bytes):
+                    page.replace_image(xref, stream=new_img_bytes)
+                    replaced_count += 1
             except Exception:
                 continue
 
@@ -126,7 +142,32 @@ async def compress_pdf(
     doc.close()
 
     final_bytes = out_bytes if len(out_bytes) < len(raw) else raw
+
+    # If flatten was requested or if the file didn't shrink and level is extreme:
+    # Try page rasterization as an aggressive alternative
+    if flatten or (level.lower() == "extreme" and len(final_bytes) >= len(raw)):
+        try:
+            in_doc = fitz.open(stream=raw, filetype="pdf")
+            out_doc = fitz.open()
+            zoom = cfg["dpi"] / 72.0
+            mat = fitz.Matrix(zoom, zoom)
+            for p in in_doc:
+                pix = p.get_pixmap(matrix=mat, alpha=False)
+                buf = io.BytesIO()
+                pix.pil_save(buf, format="JPEG", quality=cfg["jpg_quality"], optimize=True)
+                new_p = out_doc.new_page(width=p.rect.width, height=p.rect.height)
+                new_p.insert_image(p.rect, stream=buf.getvalue())
+            flattened_bytes = out_doc.tobytes(garbage=4, deflate=True)
+            in_doc.close()
+            out_doc.close()
+
+            if len(flattened_bytes) < len(final_bytes):
+                final_bytes = flattened_bytes
+        except Exception:
+            pass
+
     stem = Path(file.filename or "document.pdf").stem
+    is_unchanged = len(final_bytes) >= len(raw)
     return Response(
         content=final_bytes,
         media_type="application/pdf",
@@ -134,6 +175,7 @@ async def compress_pdf(
             "Content-Disposition": f'attachment; filename="{stem}_compressed.pdf"',
             "X-Original-Size": str(len(raw)),
             "X-Output-Size": str(len(final_bytes)),
+            "X-Compression-Status": "already-optimal" if is_unchanged else "compressed",
         },
     )
 
