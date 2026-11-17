@@ -1,0 +1,10 @@
+﻿__pycache__/
+*.py[cod]
+*.class
+venv/
+.venv/
+env/
+.env
+*.log
+omnifile_studio_temp/
+.DS_Store
