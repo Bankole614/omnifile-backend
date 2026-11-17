@@ -128,6 +128,20 @@ async def process_images(
     )
 
 
+_rembg_session = None
+
+
+def _get_rembg_session():
+    global _rembg_session
+    if _rembg_session is None:
+        try:
+            import rembg  # type: ignore
+            _rembg_session = rembg.new_session("u2net")
+        except Exception:
+            _rembg_session = False
+    return _rembg_session if _rembg_session is not False else None
+
+
 def _smart_border_matting(img: Image.Image, tolerance: int = 32, feather: int = 1) -> Image.Image:
     """Remove background using border-seeded flood-fill & soft alpha matting."""
     rgba = img.convert("RGBA")
@@ -239,12 +253,18 @@ async def remove_background(
     feather = max(0, min(5, feather))
 
     result_rgba: Image.Image | None = None
+    engine_used = "smart-matting"
     try:
         import rembg  # type: ignore
 
-        out_bytes = rembg.remove(raw)
+        session = _get_rembg_session()
+        if session:
+            out_bytes = rembg.remove(raw, session=session, post_process_mask=True)
+        else:
+            out_bytes = rembg.remove(raw, post_process_mask=True)
         result_rgba = Image.open(io.BytesIO(out_bytes)).convert("RGBA")
-    except ImportError:
+        engine_used = "ai-u2net"
+    except Exception:
         result_rgba = _smart_border_matting(img, tolerance=tolerance, feather=feather)
 
     if bg_color and bg_color.lower() != "transparent":
@@ -274,5 +294,6 @@ async def remove_background(
             "Content-Disposition": f'attachment; filename="{stem}_nobg.png"',
             "X-Original-Size": str(len(raw)),
             "X-Output-Size": str(len(final_bytes)),
+            "X-Engine-Used": engine_used,
         },
     )
