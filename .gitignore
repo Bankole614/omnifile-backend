@@ -6,5 +6,7 @@ venv/
 env/
 .env
 *.log
+*.db
+uploads/
 omnifile_studio_temp/
 .DS_Store

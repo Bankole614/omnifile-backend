@@ -2,6 +2,10 @@ import os
 from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from db import init_db, SessionLocal
+from utils.vault_manager import cleanup_expired_files
+from routers.auth_router import router as auth_router
+from routers.cloud_router import router as cloud_router
 from routers.doc_router import router as doc_router
 from routers.image_router import router as image_router
 from routers.media_router import router as media_router
@@ -36,8 +40,21 @@ ALLOWED_ORIGINS = list(dict.fromkeys(DEFAULT_ORIGINS + env_origins))
 app = FastAPI(
     title="OmniFile Studio API",
     description="All-in-One File Utility & Productivity Suite Backend",
-    version="2.0.0",
+    version="2.1.0",
 )
+
+# Initialize database schema on startup
+@app.on_event("startup")
+def on_startup():
+    try:
+        init_db()
+        db = SessionLocal()
+        try:
+            cleanup_expired_files(db)
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[OmniFile] DB Init Warning: {e}")
 
 app.add_middleware(
     CORSMiddleware,
@@ -49,6 +66,7 @@ app.add_middleware(
     expose_headers=["Content-Disposition", "X-Original-Size", "X-Output-Size"],
 )
 
+# Core file processing routers
 app.include_router(image_router)
 app.include_router(pdf_router)
 app.include_router(media_router)
@@ -56,11 +74,21 @@ app.include_router(doc_router)
 app.include_router(ocr_router)
 app.include_router(zip_router)
 
+# Optional user accounts & cloud vault routers
+app.include_router(auth_router)
+app.include_router(cloud_router)
+
 
 @app.get("/api/health")
 async def health_check():
     return {
         "status": "ok",
         "service": "OmniFile Studio API",
-        "version": "2.0.0",
+        "version": "2.1.0",
+        "features": {
+            "auth": "optional",
+            "cloud_vault": "enabled",
+            "storage_cap_mb": 100,
+            "auto_expiry_days": 7,
+        },
     }
