@@ -25,6 +25,8 @@ if env_path.exists():
 DEFAULT_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
     "https://omnifile.bankole.xyz",
     "https://bankole.xyz",
     "https://www.bankole.xyz",
@@ -59,11 +61,11 @@ def on_startup():
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_origin_regex=r"https://(.*\.)?bankole\.xyz",
+    allow_origin_regex=r"https?://(.*\.)?bankole\.xyz(:\d+)?|https?://localhost(:\d+)?|https?://127\.0\.0\.1(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["Content-Disposition", "X-Original-Size", "X-Output-Size"],
+    expose_headers=["Content-Disposition", "X-Original-Size", "X-Output-Size", "X-Engine-Used"],
 )
 
 # Core file processing routers

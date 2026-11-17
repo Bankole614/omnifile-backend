@@ -3,7 +3,7 @@ import io
 import math
 import zipfile
 from pathlib import Path
-from typing import List
+from typing import Any, List
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from PIL import Image, ImageFilter, ImageOps
