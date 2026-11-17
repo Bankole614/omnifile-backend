@@ -128,18 +128,28 @@ async def process_images(
     )
 
 
-_rembg_session = None
+_rembg_sessions: dict[str, Any] = {}
 
 
-def _get_rembg_session():
-    global _rembg_session
-    if _rembg_session is None:
+def _get_rembg_session(model_name: str = "u2net"):
+    global _rembg_sessions
+    valid_models = {"u2net", "u2net_human_seg", "isnet-general-use", "birefnet-general"}
+    if model_name not in valid_models:
+        model_name = "u2net"
+
+    if model_name not in _rembg_sessions:
         try:
             import rembg  # type: ignore
-            _rembg_session = rembg.new_session("u2net")
+
+            _rembg_sessions[model_name] = rembg.new_session(model_name)
         except Exception:
-            _rembg_session = False
-    return _rembg_session if _rembg_session is not False else None
+            try:
+                import rembg  # type: ignore
+
+                _rembg_sessions[model_name] = rembg.new_session("u2net")
+            except Exception:
+                _rembg_sessions[model_name] = None
+    return _rembg_sessions.get(model_name)
 
 
 def _smart_border_matting(img: Image.Image, tolerance: int = 32, feather: int = 1) -> Image.Image:
@@ -237,11 +247,14 @@ def _smart_border_matting(img: Image.Image, tolerance: int = 32, feather: int = 
 @router.post("/remove-bg")
 async def remove_background(
     file: UploadFile = File(...),
+    model: str = Form("u2net"),
+    alpha_matting: bool = Form(True),
+    alpha_erode: int = Form(10),
     tolerance: int = Form(32),
     feather: int = Form(1),
     bg_color: str = Form("transparent"),
 ):
-    """Remove background from an image (uses rembg AI if installed, otherwise smart border alpha matting)."""
+    """Remove background with high-accuracy neural AI and optional alpha matting for hair & fine contours."""
     raw = await file.read()
     try:
         img = Image.open(io.BytesIO(raw))
@@ -257,13 +270,22 @@ async def remove_background(
     try:
         import rembg  # type: ignore
 
-        session = _get_rembg_session()
+        session = _get_rembg_session(model)
+        kwargs: dict[str, Any] = {
+            "post_process_mask": True,
+            "alpha_matting": alpha_matting,
+        }
+        if alpha_matting:
+            kwargs["alpha_matting_foreground_threshold"] = 240
+            kwargs["alpha_matting_background_threshold"] = 10
+            kwargs["alpha_matting_erode_size"] = max(2, min(40, alpha_erode))
+
         if session:
-            out_bytes = rembg.remove(raw, session=session, post_process_mask=True)
+            out_bytes = rembg.remove(raw, session=session, **kwargs)
         else:
-            out_bytes = rembg.remove(raw, post_process_mask=True)
+            out_bytes = rembg.remove(raw, **kwargs)
         result_rgba = Image.open(io.BytesIO(out_bytes)).convert("RGBA")
-        engine_used = "ai-u2net"
+        engine_used = f"ai-{model}" + ("-matting" if alpha_matting else "")
     except Exception:
         result_rgba = _smart_border_matting(img, tolerance=tolerance, feather=feather)
 
