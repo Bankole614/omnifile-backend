@@ -69,6 +69,16 @@ class CloudFile(Base):
     user = relationship("User", back_populates="files")
 
 
+class PasswordReset(Base):
+    __tablename__ = "password_resets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String(255), index=True, nullable=False)
+    code = Column(String(10), nullable=False)
+    expires_at = Column(DateTime(timezone=True), index=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
 def init_db():
     """Create all tables in the database if they don't exist."""
     Base.metadata.create_all(bind=engine)
