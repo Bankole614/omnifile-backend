@@ -13,6 +13,13 @@ from routers.ocr_router import router as ocr_router
 from routers.pdf_router import router as pdf_router
 from routers.zip_router import router as zip_router
 
+# Register HEIC/HEIF format opener for Pillow (iPhone photo support)
+try:
+    import pillow_heif  # type: ignore
+    pillow_heif.register_heif_opener()
+except Exception:
+    pass
+
 # Load .env file if present (no external package required)
 env_path = Path(__file__).parent / ".env"
 if env_path.exists():

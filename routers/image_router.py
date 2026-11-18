@@ -10,12 +10,24 @@ from PIL import Image, ImageFilter, ImageOps
 
 router = APIRouter(prefix="/api/image", tags=["Image Tools"])
 
+try:
+    import pillow_heif  # type: ignore
+
+    pillow_heif.register_heif_opener()
+except Exception:
+    pass
+
 FORMAT_MAP = {
     "jpg": ("JPEG", "image/jpeg", ".jpg"),
     "jpeg": ("JPEG", "image/jpeg", ".jpg"),
     "png": ("PNG", "image/png", ".png"),
     "webp": ("WEBP", "image/webp", ".webp"),
     "ico": ("ICO", "image/x-icon", ".ico"),
+    "tiff": ("TIFF", "image/tiff", ".tiff"),
+    "tif": ("TIFF", "image/tiff", ".tiff"),
+    "bmp": ("BMP", "image/bmp", ".bmp"),
+    "heic": ("HEIF", "image/heic", ".heic"),
+    "heif": ("HEIF", "image/heif", ".heic"),
 }
 
 
@@ -64,13 +76,16 @@ def process_single_image(
 
     out_buf = io.BytesIO()
     save_kwargs = {"optimize": True}
-    if pil_format in ("JPEG", "WEBP"):
+    if pil_format in ("JPEG", "WEBP", "HEIF"):
         save_kwargs["quality"] = max(5, min(100, quality))
     elif pil_format == "PNG":
         if quality < 85:
             colors = max(16, int((quality / 100.0) * 256))
             img = img.quantize(colors=colors, method=Image.Quantize.FASTOCTREE)
         save_kwargs["compress_level"] = 9
+    elif pil_format == "BMP":
+        if img.mode in ("RGBA", "LA", "P"):
+            img = img.convert("RGB")
 
     img.save(out_buf, format=pil_format, **save_kwargs)
     out_name = f"{Path(filename).stem}_optimized{out_ext}"
