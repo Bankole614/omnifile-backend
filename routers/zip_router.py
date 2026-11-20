@@ -1,3 +1,4 @@
+import base64
 import io
 import mimetypes
 import zipfile
@@ -109,3 +110,37 @@ async def extract_zip_item(
         media_type=guessed_mime or "application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{base_name}"'},
     )
+
+
+@router.post("/extract-all")
+async def extract_all_zip_items(file: UploadFile = File(...)):
+    """Extract and return all files from inside an uploaded .zip archive."""
+    raw = await file.read()
+    try:
+        results = []
+        with zipfile.ZipFile(io.BytesIO(raw), "r") as zf:
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                item_bytes = zf.read(info.filename)
+                guessed_mime, _ = mimetypes.guess_type(info.filename)
+                results.append(
+                    {
+                        "name": info.filename,
+                        "size": info.file_size,
+                        "compressedSize": info.compress_size,
+                        "mime": guessed_mime or "application/octet-stream",
+                        "data": base64.b64encode(item_bytes).decode("ascii"),
+                    }
+                )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not unpack ZIP archive: {exc}")
+
+    return JSONResponse(
+        {
+            "filename": file.filename,
+            "totalFiles": len(results),
+            "files": results,
+        }
+    )
+
